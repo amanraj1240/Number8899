@@ -1,60 +1,63 @@
-from flask import Flask, request, jsonify
+from fastapi import FastAPI, Query, HTTPException
 import requests
 import time
+import os
 
-app = Flask(__name__)
+app = FastAPI()
 
 # ==================== CONFIG =====================
-YOUR_API_KEYS = ["GOKU"]
+YOUR_API_KEYS = os.getenv("API_KEYS", "GOKU").split(",")
 TARGET_API = "https://numberinfoanshapi.api-e3a.workers.dev/"
 CACHE_TIME = 3600
-cache = {}
 # ================================================
+
+cache = {}
 
 def clean_text(value):
     if isinstance(value, str):
-        return value.replace("@Urslash", "").strip()
+        return value.replace("@Gaurav_Cyber", "").strip()
     if isinstance(value, list):
         return [clean_text(v) for v in value]
     if isinstance(value, dict):
         return {k: clean_text(v) for k, v in value.items()}
     return value
 
-@app.route("/", methods=["GET"])
-def number_api():
-    num = request.args.get("num")
-    key = request.args.get("key")
 
+@app.get("/")   # 👈 ROOT ROUTE MUST EXIST
+def root(
+    num: str = Query(None),
+    key: str = Query(None)
+):
     if not num or not key:
-        return jsonify({"error": "missing parameters"}), 400
+        return {
+            "status": "ok",
+            "usage": "?num=Number&key=API_KEY",
+            "developer": "@Urslash"
+        }
 
     if key not in YOUR_API_KEYS:
-        return jsonify({"error": "invalid key"}), 403
+        raise HTTPException(status_code=403, detail="invalid key")
 
     number = "".join(filter(str.isdigit, num))
     if len(number) < 10:
-        return jsonify({"error": "invalid number"}), 400
+        raise HTTPException(status_code=400, detail="invalid number")
 
     cached = cache.get(number)
     if cached and time.time() - cached["time"] < CACHE_TIME:
-        return jsonify(cached["data"])
+        return cached["data"]
+
+    r = requests.get(f"{TARGET_API}?num={number}", timeout=10)
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail="upstream failed")
 
     try:
-        r = requests.get(f"{TARGET_API}?num={number}", timeout=10)
-        if r.status_code != 200:
-            return jsonify({"error": "upstream failed"}), 502
+        data = r.json()
+        data = clean_text(data)
+    except Exception:
+        data = {"result": r.text}
 
-        try:
-            data = r.json()
-            data = clean_text(data)
-        except Exception:
-            data = {"result": r.text}
+    data["developer"] = "@Urslash"
+    data["powered_by"] = "urslash-number-api"
 
-        data["developer"] = "@Urslash"
-        data["powered_by"] = "urslash-number-api"
-
-        cache[number] = {"time": time.time(), "data": data}
-        return jsonify(data)
-
-    except Exception as e:
-        return jsonify({"error": "request failed", "details": str(e)}), 500
+    cache[number] = {"time": time.time(), "data": data}
+    return data
